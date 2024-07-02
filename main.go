@@ -295,7 +295,7 @@ func appMain(ctx context.Context, speak func(string)) {
 							if err := os.Rename(targetPath+".mkv", filepath.Join(uploadDir, targetName+".mkv")); err != nil {
 								log.Print(err)
 							}
-							if err := os.Rename(targetPath+".png", filepath.Join(uploadDir, targetName+".png")); err != nil {
+							if err := os.Rename(targetPath+".jpg", filepath.Join(uploadDir, targetName+".png")); err != nil {
 								log.Print(err)
 							}
 							speak("ユーチューブにアップロード完了しました。")
