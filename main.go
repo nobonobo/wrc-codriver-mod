@@ -320,7 +320,6 @@ func appMain(ctx context.Context, speak func(string)) {
 					speak("シェイクダウンです。安全運転をお願いします。")
 					return
 				}
-				speak("録画を開始します。")
 				status, err := obsClient.GetRecordStatus()
 				if err != nil {
 					log.Print(err)
@@ -328,8 +327,11 @@ func appMain(ctx context.Context, speak func(string)) {
 				if status.OutputActive {
 					if err := obsClient.StopRecord(); err != nil {
 						log.Print(err)
+					} else {
+						time.Sleep(1 * time.Second)
 					}
 				}
+				speak("録画を開始します。")
 				name := strings.Join([]string{
 					"#EASportsWRC", lastRecordState.Mode,
 					lastRecordState.Route, lastRecordState.Vehicle,
