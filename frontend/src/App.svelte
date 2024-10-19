@@ -6,8 +6,11 @@
   let auto_start_recording = false;
   let auto_stop_recording = false;
   let auto_youtube_upload = false;
-  let stage_info = "";
-  let vehicle_info = "";
+  let location = "";
+  let route = "";
+  let category = "";
+  let manufacturer = "";
+  let vehicle = "";
   let progress = 0.0;
   async function onChange(ev) {
     await Settings.Update({
@@ -29,26 +32,28 @@
     stopDisabled = true;
   }
   Events.On("obs-event", async (ev) => {
-    switch (ev.data.outputState) {
+    switch (ev.data[0].outputState) {
       case "OBS_WEBSOCKET_OUTPUT_STOPPED":
         stopDisabled = true;
     }
   });
   Events.On("recording", async (ev) => {
-    stopDisabled = ev.data.recording;
-    stage_info = ev.data.location + " / " + ev.data.route;
-    vehicle_info =
-      ev.data.class + " / " + ev.data.manufacturer + " / " + "vehicle";
-    console.log(ev.data);
+    console.log(ev.data[0]);
+    stopDisabled = ev.data[0].recording;
+    location = ev.data[0].location;
+    route = ev.data[0].route;
+    category = ev.data[0].class;
+    manufacturer = ev.data[0].manufacturer;
+    vehicle = ev.data[0].vehicle;
   });
   Events.On("finished", async (ev) => {
-    console.log(ev.data);
+    console.log(ev.data[0]);
   });
   Events.On("tyre-state", async (ev) => {
-    console.log(ev.data);
+    console.log(ev.data[0]);
   });
   Events.On("packet", async (ev) => {
-    progress = ev.data.stage_progress * 100;
+    progress = ev.data[0].stage_progress * 100;
   });
 </script>
 
@@ -98,20 +103,47 @@
         />
       </label>
       <label class="label">
-        <span class="label-text">Vehicle:</span>
+        <span class="label-text">Class:</span>
         <input
           type="text"
           class="input input-sm input-ghost"
-          value={vehicle_info}
+          value={category}
           disabled
         />
       </label>
       <label class="label">
-        <span class="label-text">Stage:</span>
+        <span class="label-text">Manufacturer:</span>
         <input
           type="text"
           class="input input-sm input-ghost"
-          value={stage_info}
+          value={manufacturer}
+          disabled
+        />
+      </label>
+      <label class="label">
+        <span class="label-text">Vehicle:</span>
+        <input
+          type="text"
+          class="input input-sm input-ghost"
+          value={vehicle}
+          disabled
+        />
+      </label>
+      <label class="label">
+        <span class="label-text">Location:</span>
+        <input
+          type="text"
+          class="input input-sm input-ghost"
+          value={location}
+          disabled
+        />
+      </label>
+      <label class="label">
+        <span class="label-text">Route:</span>
+        <input
+          type="text"
+          class="input input-sm input-ghost"
+          value={route}
           disabled
         />
       </label>

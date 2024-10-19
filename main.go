@@ -206,9 +206,9 @@ func appMain(ctx context.Context, speak func(string)) {
 		Title:     "EA Sports™ WRC Codriver Mod",
 		Hidden:    false,
 		MinWidth:  400,
-		MinHeight: 400,
+		MinHeight: 500,
 		Width:     400,
-		Height:    400,
+		Height:    500,
 		ShouldClose: func(window *application.WebviewWindow) bool {
 			window.Hide()
 			return false
@@ -235,6 +235,7 @@ func appMain(ctx context.Context, speak func(string)) {
 	})
 	menu.AddSeparator()
 	menu.Add("Quit").OnClick(func(ctx *application.Context) {
+		log.Println("Quit")
 		app.Quit()
 	})
 	systemTray.SetMenu(menu)
@@ -250,9 +251,10 @@ func appMain(ctx context.Context, speak func(string)) {
 	}
 	defer obsClient.Disconnect()
 	lastRecordState := telemetry.Event{}
-	app.Events.On("obs-event", func(event *application.WailsEvent) {
+	app.OnEvent("obs-event", func(event *application.CustomEvent) {
+		data := event.Data.([]any)[0]
 		log.Printf("%s: %#v", event.Name, event.Data)
-		switch e := event.Data.(type) {
+		switch e := data.(type) {
 		default:
 			log.Println("obs-event:", event.Data)
 		case *obs_events.CustomEvent:
@@ -306,8 +308,8 @@ func appMain(ctx context.Context, speak func(string)) {
 		}
 	})
 	paused := false
-	app.Events.On("recording", func(event *application.WailsEvent) {
-		lastRecordState = event.Data.(telemetry.Event)
+	app.OnEvent("recording", func(event *application.CustomEvent) {
+		lastRecordState = event.Data.([]any)[0].(telemetry.Event)
 		log.Printf("%s: %#v", event.Name, lastRecordState)
 		if lastRecordState.Recording {
 			if paused && lastRecordState.Progress > 0 {
@@ -363,14 +365,14 @@ func appMain(ctx context.Context, speak func(string)) {
 			}
 		}
 	})
-	app.Events.On("finished", func(event *application.WailsEvent) {
-		state := event.Data.(telemetry.Event)
+	app.OnEvent("finished", func(event *application.CustomEvent) {
+		state := event.Data.([]any)[0].(telemetry.Event)
 		log.Printf("%s: %#v", event.Name, state)
 		speak("フィニッシュ！")
 	})
 	var lastTyreState telemetry.TyreState
-	app.Events.On("tyre-state", func(event *application.WailsEvent) {
-		state := event.Data.(telemetry.TyreState)
+	app.OnEvent("tyre-state", func(event *application.CustomEvent) {
+		state := event.Data.([]any)[0].(telemetry.TyreState)
 		defer func() {
 			lastTyreState = state
 		}()
@@ -409,8 +411,8 @@ func appMain(ctx context.Context, speak func(string)) {
 		}
 		time.AfterFunc(1500*time.Millisecond, func() { speak(strings.Join(text, "")) })
 	})
-	app.Events.On("packet", func(event *application.WailsEvent) {
-		pkt := event.Data.(*packet.Packet)
+	app.OnEvent("packet", func(event *application.CustomEvent) {
+		pkt := event.Data.([]any)[0].(*packet.Packet)
 		if pkt.PacketUID%600 == 0 {
 			log.Printf("packet: %#v", pkt)
 		}

@@ -34,12 +34,9 @@ func (s *Client) Connect() error {
 		return err
 	}
 	s.client = client
-	application.Get().Events.Emit(&application.WailsEvent{
-		Name: "obs-event",
-		Data: &events.CustomEvent{
-			EventData: map[string]any{
-				"id": "connect",
-			},
+	application.Get().EmitEvent("obs-event", &events.CustomEvent{
+		EventData: map[string]any{
+			"id": "connect",
 		},
 	})
 	go client.Listen(func(event any) {
@@ -49,10 +46,7 @@ func (s *Client) Connect() error {
 			s.client.Disconnect()
 			s.client = nil
 		default:
-			application.Get().Events.Emit(&application.WailsEvent{
-				Name: "obs-event",
-				Data: event,
-			})
+			application.Get().EmitEvent("obs-event", event)
 		}
 	})
 	return nil

@@ -38,7 +38,7 @@ type TyreState struct {
 
 type Service struct {
 	addr       *net.UDPAddr
-	events     *application.EventProcessor
+	app        *application.App
 	lastPacket *packet.Packet
 	timeout    *time.Timer
 	countDown  int
@@ -50,32 +50,30 @@ func Start(ctx context.Context, addr string) (*Service, error) {
 		return nil, err
 	}
 	s := &Service{
-		addr:   ua,
-		events: application.Get().Events,
+		addr: ua,
+		app:  application.Get(),
 	}
 	s.timeout = time.AfterFunc(DefaultTimeout, func() {
 		if s.lastPacket == nil {
 			return
 		}
-		s.events.Emit(&application.WailsEvent{
-			Name: "recording",
-			Data: Event{
-				Recording:    false,
-				Mode:         s.lastPacket.GameModeString(),
-				Shakedown:    s.lastPacket.StageShakedown,
-				Result:       s.lastPacket.StageResultStatusString(),
-				Location:     s.lastPacket.Location(),
-				Route:        s.lastPacket.Route(),
-				Class:        s.lastPacket.VehicleClass(),
-				Manufacturer: s.lastPacket.VehicleManufacturer(),
-				Vehicle:      s.lastPacket.Vehicle(),
-				Length:       s.lastPacket.StageLength,
-				Current:      s.lastPacket.StageCurrentDistance,
-				Progress:     s.lastPacket.StageProgress,
-				Time:         s.lastPacket.StageResultTime,
-				Penalty:      s.lastPacket.StageResultTimePenalty,
-			},
-		})
+		s.app.EmitEvent("recording", Event{
+			Recording:    false,
+			Mode:         s.lastPacket.GameModeString(),
+			Shakedown:    s.lastPacket.StageShakedown,
+			Result:       s.lastPacket.StageResultStatusString(),
+			Location:     s.lastPacket.Location(),
+			Route:        s.lastPacket.Route(),
+			Class:        s.lastPacket.VehicleClass(),
+			Manufacturer: s.lastPacket.VehicleManufacturer(),
+			Vehicle:      s.lastPacket.Vehicle(),
+			Length:       s.lastPacket.StageLength,
+			Current:      s.lastPacket.StageCurrentDistance,
+			Progress:     s.lastPacket.StageProgress,
+			Time:         s.lastPacket.StageResultTime,
+			Penalty:      s.lastPacket.StageResultTimePenalty,
+		},
+		)
 		s.lastPacket = nil
 		//log.Printf("recording-stop: %#v", s.lastPacket)
 	})
@@ -117,31 +115,25 @@ func (s *Service) handler(pkt *packet.Packet) {
 		s.timeout.Reset(DefaultTimeout)
 		s.lastPacket = pkt
 	}()
-	s.events.Emit(&application.WailsEvent{
-		Name: "packet",
-		Data: pkt,
-	})
+	s.app.EmitEvent("packet", pkt)
 	orig := s.countDown
 	if s.countDown > 0 {
 		s.countDown--
 	}
 	if orig > 0 && s.countDown == 0 {
-		s.events.Emit(&application.WailsEvent{
-			Name: "recording",
-			Data: Event{
-				Recording:    true,
-				Shakedown:    pkt.StageShakedown,
-				Mode:         pkt.GameModeString(),
-				Result:       pkt.StageResultStatusString(),
-				Location:     pkt.Location(),
-				Route:        pkt.Route(),
-				Class:        pkt.VehicleClass(),
-				Manufacturer: pkt.VehicleManufacturer(),
-				Vehicle:      pkt.Vehicle(),
-				Length:       pkt.StageLength,
-				Current:      pkt.StageCurrentDistance,
-				Progress:     pkt.StageProgress,
-			},
+		s.app.EmitEvent("recording", Event{
+			Recording:    true,
+			Shakedown:    pkt.StageShakedown,
+			Mode:         pkt.GameModeString(),
+			Result:       pkt.StageResultStatusString(),
+			Location:     pkt.Location(),
+			Route:        pkt.Route(),
+			Class:        pkt.VehicleClass(),
+			Manufacturer: pkt.VehicleManufacturer(),
+			Vehicle:      pkt.Vehicle(),
+			Length:       pkt.StageLength,
+			Current:      pkt.StageCurrentDistance,
+			Progress:     pkt.StageProgress,
 		})
 	}
 	if s.lastPacket == nil || (pkt.StageCurrentDistance == 0 && s.lastPacket.StageCurrentDistance != 0) {
@@ -155,22 +147,19 @@ func (s *Service) handler(pkt *packet.Packet) {
 			return
 		case 0: // not_finished
 		case 1, 2, 3, 4, 5: // finished
-			s.events.Emit(&application.WailsEvent{
-				Name: "finished",
-				Data: Event{
-					Mode:         pkt.GameModeString(),
-					Result:       pkt.StageResultStatusString(),
-					Location:     pkt.Location(),
-					Route:        pkt.Route(),
-					Class:        pkt.VehicleClass(),
-					Manufacturer: pkt.VehicleManufacturer(),
-					Vehicle:      pkt.Vehicle(),
-					Length:       pkt.StageLength,
-					Current:      pkt.StageCurrentDistance,
-					Progress:     pkt.StageProgress,
-					Time:         pkt.StageResultTime,
-					Penalty:      pkt.StageResultTimePenalty,
-				},
+			s.app.EmitEvent("finished", Event{
+				Mode:         pkt.GameModeString(),
+				Result:       pkt.StageResultStatusString(),
+				Location:     pkt.Location(),
+				Route:        pkt.Route(),
+				Class:        pkt.VehicleClass(),
+				Manufacturer: pkt.VehicleManufacturer(),
+				Vehicle:      pkt.Vehicle(),
+				Length:       pkt.StageLength,
+				Current:      pkt.StageCurrentDistance,
+				Progress:     pkt.StageProgress,
+				Time:         pkt.StageResultTime,
+				Penalty:      pkt.StageResultTimePenalty,
 			})
 		}
 	}
@@ -178,14 +167,11 @@ func (s *Service) handler(pkt *packet.Packet) {
 		pkt.VehicleTyreStateBr != s.lastPacket.VehicleTyreStateBr ||
 		pkt.VehicleTyreStateFl != s.lastPacket.VehicleTyreStateFl ||
 		pkt.VehicleTyreStateFr != s.lastPacket.VehicleTyreStateFr {
-		s.events.Emit(&application.WailsEvent{
-			Name: "tyre-state",
-			Data: TyreState{
-				ForwardLeft:   pkt.VehicleTyreState(packet.ForwardLeft),
-				ForwardRight:  pkt.VehicleTyreState(packet.ForwardRight),
-				BackwordLeft:  pkt.VehicleTyreState(packet.BackwordLeft),
-				BackwordRight: pkt.VehicleTyreState(packet.BackwordRight),
-			},
+		s.app.EmitEvent("tyre-state", TyreState{
+			ForwardLeft:   pkt.VehicleTyreState(packet.ForwardLeft),
+			ForwardRight:  pkt.VehicleTyreState(packet.ForwardRight),
+			BackwordLeft:  pkt.VehicleTyreState(packet.BackwordLeft),
+			BackwordRight: pkt.VehicleTyreState(packet.BackwordRight),
 		})
 	}
 }
