@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"text/template"
 	"time"
 
@@ -69,13 +70,37 @@ time: {{.Time}}
 penalty: {{.Penalty}}
 `))
 
-func youtubeUpload(ctx context.Context, src string, info telemetry.Event) (string, error) {
+func copyFile(src, dst string) error {
+	// ソースファイルを開く
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("ソースファイルを開けませんでした: %w", err)
+	}
+	defer srcFile.Close()
+
+	// コピー先ファイルを作成
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("コピー先ファイルを作成できませんでした: %w", err)
+	}
+	defer dstFile.Close()
+
+	// ファイルをコピー
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		return fmt.Errorf("ファイルのコピーに失敗しました: %w", err)
+	}
+
+	return nil
+}
+
+func youtubeUpload(ctx context.Context, src string, info telemetry.Event) error {
 	if len(config.YouTubeUploader) == 0 {
-		return "", nil
+		return nil
 	}
 	buff := bytes.NewBuffer(nil)
 	if err := descTemplate.Execute(buff, info); err != nil {
-		return "", err
+		return err
 	}
 	name := strings.Join([]string{
 		"#EASportsWRC", info.Mode,
@@ -85,11 +110,11 @@ func youtubeUpload(ctx context.Context, src string, info telemetry.Event) (strin
 	d := filepath.Dir(src)
 	screenshot := filepath.Join(d, name+".jpg")
 	if err := reduceJPEG(ssPath, screenshot); err != nil {
-		return "", err
+		return err
 	}
 	meta := filepath.Join(tempDir, "meta.json")
 	if err := os.WriteFile(meta, []byte(`{"playlistIds": ["PLNhVzDfOlkDhEHJyp0VwUsYKZjyGDrj_i"]}`), 0644); err != nil {
-		return "", err
+		return err
 	}
 	args := []string{
 		"-secrets", config.YouTubeSecret,
@@ -103,27 +128,24 @@ func youtubeUpload(ctx context.Context, src string, info telemetry.Event) (strin
 		"-filename", src,
 		"-thumbnail", screenshot,
 		"-metaJSON", meta,
+		"-metaJSONout", src + ".json",
 	}
 	if config.YouTubePublic {
 		args = append(args, "-privacy", "public")
 	}
 	log.Println(config.YouTubeUploader, args)
-	scripts := []string{
-		config.YouTubeUploader,
-	}
-	for _, v := range args {
-		if strings.Contains(v, " ") {
-			scripts = append(scripts, `"`+v+`"`)
-		} else {
-			scripts = append(scripts, v)
-		}
-	}
-	script := strings.Join(scripts, " ")
 	cmd := exec.CommandContext(ctx, config.YouTubeUploader, args...)
-	cmd.Stderr = os.Stderr
-	cmd.Stdout = os.Stdout
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		HideWindow:    true,
+		CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP,
+	}
 	cmd.Dir = packet.WrcRoot
-	return script, cmd.Run()
+	result, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("youtube upload failed: %w/%s", err, result)
+	}
+	application.Get().EmitEvent("result", string(result))
+	return nil
 }
 
 func loadPNG(fname string) (image.Image, error) {
@@ -206,9 +228,9 @@ func appMain(ctx context.Context, speak func(string)) {
 		Title:     "EA Sports™ WRC Codriver Mod",
 		Hidden:    false,
 		MinWidth:  400,
-		MinHeight: 500,
+		MinHeight: 750,
 		Width:     400,
-		Height:    500,
+		Height:    750,
 		ShouldClose: func(window *application.WebviewWindow) bool {
 			window.Hide()
 			return false
@@ -250,6 +272,7 @@ func appMain(ctx context.Context, speak func(string)) {
 		log.Print(err)
 	}
 	defer obsClient.Disconnect()
+	var pktLog *os.File
 	lastRecordState := telemetry.Event{}
 	app.OnEvent("obs-event", func(event *application.CustomEvent) {
 		data := event.Data.([]any)[0]
@@ -257,13 +280,31 @@ func appMain(ctx context.Context, speak func(string)) {
 		switch e := data.(type) {
 		default:
 			log.Println("obs-event:", event.Data)
+		case *obs_events.ScreenshotSaved:
+			name := strings.Join([]string{
+				"#EASportsWRC", lastRecordState.Mode,
+				lastRecordState.Route, lastRecordState.Vehicle,
+			}, " - ")
+			ssPath := filepath.Join(tempDir, name+".png")
+			if err := copyFile(e.SavedScreenshotPath, ssPath); err != nil {
+				log.Print(err)
+				app.EmitEvent("result", err.Error())
+			} else {
+				os.Remove(e.SavedScreenshotPath)
+			}
 		case *obs_events.CustomEvent:
 			s, ok := e.EventData["id"]
 			if ok && s == "connect" {
+				app.EmitEvent("result", "OBSと接続しました。")
 				speak("OBSと接続しました。")
 			}
 		case *obs_events.ExitStarted:
+			app.EmitEvent("result", "OBSが終了しました。")
 			speak("OBSが終了しました。")
+			if pktLog != nil {
+				pktLog.Close()
+				defer func() { pktLog = nil }()
+			}
 		case *obs_events.RecordStateChanged:
 			if e.OutputState != "OBS_WEBSOCKET_OUTPUT_STOPPED" {
 				return
@@ -284,21 +325,63 @@ func appMain(ctx context.Context, speak func(string)) {
 					log.Print(err)
 				}
 				if lastRecordState.Result == "finished" {
+					if pktLog != nil {
+						pkt := pktLog
+						pktLog = nil
+						if err := pkt.Sync(); err != nil {
+							log.Print(err)
+						}
+						packetsDir := filepath.Join(dir, "packets")
+						os.MkdirAll(packetsDir, 0755)
+						targetPath := filepath.Join(packetsDir, strings.Join([]string{
+							"#EASportsWRC", lastRecordState.Location,
+							lastRecordState.Route,
+						}, " - ")+".pkt")
+						dstts := int64(0)
+						statDst, err := os.Stat(targetPath)
+						if err != nil {
+							if !os.IsNotExist(err) {
+								log.Print(err)
+							}
+						} else {
+							dstts = statDst.Size()
+						}
+						statSrc, err := pkt.Stat()
+						if err != nil {
+							log.Print(err)
+						}
+						if dstts == 0 || dstts > statSrc.Size() {
+							if err := copyFile(pkt.Name(), targetPath); err != nil {
+								log.Print(err)
+							}
+						}
+						defer func() {
+							pkt.Close()
+							pkt = nil
+						}()
+					}
 					speak("録画を完了しました。")
 					if settingsService.Get().AutoYouTubeUpload {
-						script, err := youtubeUpload(ctx, targetPath+".mkv", lastRecordState)
-						if err != nil {
+						speak("ユーチューブにアップロード開始。")
+						app.EmitEvent("result", "finished")
+						if err := youtubeUpload(ctx, targetPath+".mkv", lastRecordState); err != nil {
 							log.Println(err)
+							app.EmitEvent("result", err.Error())
 							speak("ユーチューブにアップロード失敗しました。")
-							os.WriteFile(filepath.Join(dir, targetName+".bat"), []byte(script), 0755)
 						} else {
 							uploadDir := filepath.Join(dir, "uploaded")
 							os.MkdirAll(uploadDir, 0755)
 							if err := os.Rename(targetPath+".mkv", filepath.Join(uploadDir, targetName+".mkv")); err != nil {
 								log.Print(err)
+								app.EmitEvent("result", err.Error())
 							}
-							if err := os.Rename(targetPath+".jpg", filepath.Join(uploadDir, targetName+".png")); err != nil {
+							if err := os.Rename(targetPath+".jpg", filepath.Join(uploadDir, targetName+".jpg")); err != nil {
 								log.Print(err)
+								app.EmitEvent("result", err.Error())
+							}
+							if err := os.Rename(targetPath+".mkv.json", filepath.Join(uploadDir, targetName+".json")); err != nil {
+								log.Print(err)
+								app.EmitEvent("result", err.Error())
 							}
 							speak("ユーチューブにアップロード完了しました。")
 						}
@@ -332,6 +415,10 @@ func appMain(ctx context.Context, speak func(string)) {
 					} else {
 						time.Sleep(1 * time.Second)
 					}
+					if pktLog != nil {
+						pktLog.Close()
+						pktLog = nil
+					}
 				}
 				speak("録画を開始します。")
 				name := strings.Join([]string{
@@ -341,9 +428,17 @@ func appMain(ctx context.Context, speak func(string)) {
 				ssPath := filepath.Join(tempDir, name+".png")
 				if _, err := os.Stat(ssPath); os.IsNotExist(err) {
 					//speak("スクリーンショット")
-					if err := obsClient.ScreenShot(ssPath); err != nil {
+					if err := obsClient.ScreenShot(); err != nil {
 						log.Print(err)
+						app.EmitEvent("result", err.Error())
 					}
+				}
+				pktPath := filepath.Join(tempDir, name+".pkt")
+				fp, err := os.Create(pktPath)
+				if err != nil {
+					log.Print(err)
+				} else {
+					pktLog = fp
 				}
 				if err := obsClient.StartRecord(); err != nil {
 					log.Print(err)
@@ -411,10 +506,10 @@ func appMain(ctx context.Context, speak func(string)) {
 		}
 		time.AfterFunc(1500*time.Millisecond, func() { speak(strings.Join(text, "")) })
 	})
-	app.OnEvent("packet", func(event *application.CustomEvent) {
-		pkt := event.Data.([]any)[0].(*packet.Packet)
-		if pkt.PacketUID%600 == 0 {
-			log.Printf("packet: %#v", pkt)
+	app.OnEvent("raw", func(event *application.CustomEvent) {
+		pkt := event.Data.([]any)[0].([]byte)
+		if pktLog != nil {
+			pktLog.Write(pkt)
 		}
 	})
 	// Run the application. This blocks until the application has been exited.
@@ -426,12 +521,22 @@ func appMain(ctx context.Context, speak func(string)) {
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	reader, writer := io.Pipe()
+	//reader, writer := io.Pipe()
 	cmd := exec.CommandContext(ctx, config.VoiceVoxCli)
-	cmd.Stdin = reader
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	writer, err := cmd.StdinPipe()
+	if err != nil {
+		log.Fatal(err)
+	}
+	//cmd.Stdin = reader
 	if err := cmd.Start(); err != nil {
 		log.Fatal(err)
 	}
+	go func() {
+		defer application.Get().Quit()
+		cmd.Wait()
+		cancel()
+	}()
 	appMain(ctx, func(text string) {
 		log.Println("speak:", text)
 		fmt.Fprintln(writer, text)

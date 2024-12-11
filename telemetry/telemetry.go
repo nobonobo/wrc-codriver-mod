@@ -101,11 +101,13 @@ func (s *Service) run(ctx context.Context) {
 			log.Print(err)
 			return
 		}
+		s.app.EmitEvent("raw", buf[:n])
 		pkt := packet.New()
 		if err := pkt.UnmarshalBinary(buf[:n]); err != nil {
 			log.Print(err)
 			continue
 		}
+		s.app.EmitEvent("packet", pkt)
 		s.handler(pkt)
 	}
 }
@@ -115,7 +117,6 @@ func (s *Service) handler(pkt *packet.Packet) {
 		s.timeout.Reset(DefaultTimeout)
 		s.lastPacket = pkt
 	}()
-	s.app.EmitEvent("packet", pkt)
 	orig := s.countDown
 	if s.countDown > 0 {
 		s.countDown--

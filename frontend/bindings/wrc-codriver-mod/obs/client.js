@@ -55,11 +55,10 @@ export function ResumeRecord() {
 }
 
 /**
- * @param {string} output
  * @returns {Promise<void> & { cancel(): void }}
  */
-export function ScreenShot(output) {
-    let $resultPromise = /** @type {any} */($Call.ByID(1776714469, output));
+export function ScreenShot() {
+    let $resultPromise = /** @type {any} */($Call.ByID(1776714469));
     return $resultPromise;
 }
 
